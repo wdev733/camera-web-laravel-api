@@ -1,0 +1,46 @@
+{
+    "requiresCompatibilities": ["EC2"],
+    "memory": "512",
+    "volumes": [],
+    "family": "onvp-api-prod",
+    "networkMode": "bridge",
+    "executionRoleArn": "arn:aws:iam::969476897539:role/ecsTaskExecutionRole",
+    "containerDefinitions": [
+        {
+            "volumesFrom": [],
+            "image": "969476897539.dkr.ecr.eu-west-1.amazonaws.com/onvp-api:$CI_COMMIT_SHORT_SHA",
+            "name": "onvp-api-php",
+            "environment": [],
+            "logConfiguration": {
+                "logDriver": "awslogs",
+                "options": {
+                    "awslogs-group": "/ecs/onvp-api-prod",
+                    "awslogs-region": "eu-west-1",
+                    "awslogs-stream-prefix": "ecs"
+                }
+            }
+        },
+        {
+            "volumesFrom": [],
+            "image": "969476897539.dkr.ecr.eu-west-1.amazonaws.com/onvp-api-nginx:$CI_COMMIT_SHORT_SHA",
+            "name": "onvp-api-nginx",
+            "links": ["onvp-api-php:app"],
+            "environment": [],
+            "logConfiguration": {
+                "logDriver": "awslogs",
+                "options": {
+                    "awslogs-group": "/ecs/onvp-api-prod",
+                    "awslogs-region": "eu-west-1",
+                    "awslogs-stream-prefix": "ecs"
+                }
+            },
+            "portMappings": [
+                {
+                    "hostPort": 0,
+                    "protocol": "tcp",
+                    "containerPort": 80
+                }
+            ]
+        }
+    ]
+}

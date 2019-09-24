@@ -1,0 +1,10 @@
+FROM nginx:alpine
+
+WORKDIR /var/www
+
+COPY . .
+
+RUN mv nginx/conf.d/* /etc/nginx/conf.d
+
+EXPOSE 80 
+

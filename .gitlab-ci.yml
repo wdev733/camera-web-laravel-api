@@ -1,0 +1,253 @@
+stages:
+  - preparation
+  - docs
+  - build
+  - lint
+  - test
+  - docker:login
+  - docker:build
+  #- docker:push
+  - deploy
+
+variables:
+  AWS_DEFAULT_REGION: eu-west-1
+  AWS_ECR_REPOSITORY: 969476897539.dkr.ecr.eu-west-1.amazonaws.com/onvp-api
+  AWS_ECR_REPOSITORY_NGINX: 969476897539.dkr.ecr.eu-west-1.amazonaws.com/onvp-api-nginx
+  GIT_STRATEGY: clone
+
+cache:
+  key: "$CI_JOB_NAME-$CI_COMMIT_REF_SLUG"
+
+pages:
+  stage: docs
+  script:
+  - rm -rf public/*
+  - cp -r docs/. public/
+  - ls
+  artifacts:
+    paths:
+    - public
+  only:
+    - develop
+    - master
+
+composer:
+  stage: preparation
+  services:
+    - mysql:5.7
+  image: edbizarro/gitlab-ci-pipeline-php:7.2
+  script:
+    - php -v
+    - composer install --prefer-dist --no-ansi --no-interaction --no-progress --no-scripts
+    - cp .env.testing .env
+    - php artisan key:generate --show
+    - php artisan jwt:secret
+  artifacts:
+    paths:
+      - vendor/
+      - .env
+    expire_in: 1 days
+    when: always
+  cache:
+    paths:
+      - vendor/
+
+# yarn:
+#   stage: preparation
+#   image: edbizarro/gitlab-ci-pipeline-php:7.2
+#   script:
+#     - yarn --version
+#     - yarn install --pure-lockfile
+#   artifacts:
+#     paths:
+#       - node_modules/
+#     expire_in: 1 days
+#     when: always
+#   cache:
+#     paths:
+#       - node_modules/
+
+# build-assets:
+#   stage: build
+#   image: edbizarro/gitlab-ci-pipeline-php:7.2
+#   dependencies:
+#     - composer
+#     - yarn
+#   script:
+#     - yarn --version
+#     - yarn run production --progress false
+#   artifacts:
+#     paths:
+#       - public/css/
+#       - public/js/
+#       - public/fonts/
+#       - public/mix-manifest.json
+#     expire_in: 1 days
+#     when: always
+
+#db-seeding:
+#  stage: build
+#  services:
+#    - mysql:5.7
+#  image: edbizarro/gitlab-ci-pipeline-php:7.2
+#  dependencies:
+#    - composer
+#    - yarn
+#  script:
+#    - php artisan migrate:fresh --seed
+#  artifacts:
+#    paths:
+#      - ./storage/logs
+#    expire_in: 1 days
+#    when: on_failure
+
+lint:
+  stage: lint
+  image: ruggednetworks/php-lint-fix
+  script:
+    - php-cs-fixer fix --version
+    - php-cs-fixer fix --dry-run --verbose --format=junit --using-cache=no --diff > report.xml
+  artifacts:
+    paths:
+      - report.xml
+    expire_in: 1 days
+    reports:
+      junit: report.xml
+
+phpcpd:
+  stage: lint
+  image: edbizarro/gitlab-ci-pipeline-php:7.2
+  script:
+    - test -f phpcpd.phar || curl -L https://phar.phpunit.de/phpcpd.phar -o phpcpd.phar
+    - php phpcpd.phar app/ --min-lines=50
+  dependencies: []
+  cache:
+    paths:
+      - phpcpd.phar
+
+phpunit:
+  stage: test
+  services:
+    - mysql:5.7
+  image: edbizarro/gitlab-ci-pipeline-php:7.2
+  dependencies:
+#    - build-assets
+    - composer
+#    - db-seeding
+  script:
+    - php -v
+    - sudo cp /usr/local/etc/php/conf.d/docker-php-ext-xdebug.ini /usr/local/etc/php/conf.d/docker-php-ext-xdebug.bak
+    - echo "" | sudo tee /usr/local/etc/php/conf.d/docker-php-ext-xdebug.ini
+    - ./vendor/phpunit/phpunit/phpunit --version
+    - php -d short_open_tag=off ./vendor/phpunit/phpunit/phpunit -v --colors=never --stderr
+    - sudo cp /usr/local/etc/php/conf.d/docker-php-ext-xdebug.bak /usr/local/etc/php/conf.d/docker-php-ext-xdebug.ini
+  artifacts:
+    paths:
+      - ./storage/logs
+    expire_in: 1 days
+    when: on_failure
+
+sensiolabs:
+  stage: test
+  image: edbizarro/gitlab-ci-pipeline-php:7.2
+  script:
+    - test -d security-checker || git clone https://github.com/sensiolabs/security-checker.git
+    - cd security-checker
+    - composer install
+    - php security-checker security:check ../composer.lock
+  dependencies: []
+  cache:
+    paths:
+      - security-checker/
+
+docker-login:
+  before_script:
+    - pip install awscli
+    - apt update
+    - apt install -y gettext-base
+  stage: docker:login
+  image: python:latest
+  script:
+    - aws ecr get-login --region $AWS_DEFAULT_REGION | sed  s/'-e none'// > ecr_login
+  artifacts:
+    paths:
+      - ecr_login
+  only:
+    - develop
+    - master
+
+docker-build:
+  variables:
+    DOCKER_HOST: tcp://docker:2375/
+  stage: docker:build
+  image: docker:18
+  services:
+    - docker:dind
+  dependencies:
+#    - build-assets
+    - composer
+    - docker-login
+  before_script:
+    - apk add gettext
+  script:
+    - chmod u+x ecr_login
+    - sh ./ecr_login
+    - >
+      if [ "${CI_COMMIT_REF_NAME}" == "develop" ]; then
+        cp .env-staging .env
+      fi
+
+      if [ "${CI_COMMIT_REF_NAME}" == "master" ]; then
+        cp .env-production .env
+      fi
+    - cat .env | envsubst > .env.temp
+    - mv .env.temp .env
+    - >
+      docker build
+      --pull
+      --build-arg VCS_REF=$CI_COMMIT_SHA
+      --build-arg VCS_URL=$CI_PROJECT_URL
+      -t $AWS_ECR_REPOSITORY:$CI_COMMIT_SHORT_SHA
+      .
+    - >
+      docker build
+      --pull
+      -f DockerfileNginx
+      -t $AWS_ECR_REPOSITORY_NGINX:$CI_COMMIT_SHORT_SHA
+      .
+    - docker push $AWS_ECR_REPOSITORY:$CI_COMMIT_SHORT_SHA
+    - docker push $AWS_ECR_REPOSITORY_NGINX:$CI_COMMIT_SHORT_SHA
+  only:
+    - develop
+    - master
+
+docker-deploy-staging:
+  stage: deploy
+  before_script:
+    - pip install awscli
+    - apt update
+    - apt install -y gettext-base
+  image: python:latest
+  script:
+    - aws logs create-log-group --log-group-name /ecs/onvp-api-stag || true
+    - cat deploy/api-task-definition-staging-template.json | envsubst > deploy/api-task-definition-staging.json
+    - aws ecs register-task-definition --family onvp-api-stag --cli-input-json file://deploy/api-task-definition-staging.json
+    - aws ecs update-service --cluster onvp-stag --service onvp-api --task-definition onvp-api-stag
+  only:
+    - develop
+
+docker-deploy-production:
+  stage: deploy
+  before_script:
+    - pip install awscli
+    - apt update
+    - apt install -y gettext-base
+  image: python:latest
+  script:
+    - aws logs create-log-group --log-group-name /ecs/onvp-api-prod || true
+    - cat deploy/api-task-definition-production-template.json | envsubst > deploy/api-task-definition-production.json
+    - aws ecs register-task-definition --family onvp-api-prod --cli-input-json file://deploy/api-task-definition-production.json
+    - aws ecs update-service --cluster onvp-prod --service onvp-api --task-definition onvp-api-prod
+  only:
+    - master
+
