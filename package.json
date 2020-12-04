@@ -19,7 +19,7 @@
         "cross-env": "^5.1",
         "dropzone": "^5.5.1",
         "flatpickr": "^4.5.7",
-        "highlight.js": "^9.15.6",
+        "highlight.js": "^10.4.1",
         "highlightjs": "^9.12.0",
         "imagemin-mozjpeg": "^8.0.0",
         "imagemin-webpack-plugin": "^2.4.2",
