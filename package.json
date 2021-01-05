@@ -12,7 +12,7 @@
         "build-string-with-button-prod": "cd nova-components/StringWithButton && npm run prod"
     },
     "devDependencies": {
-        "axios": "^0.18",
+        "axios": "^0.21",
         "bootstrap": "4.3.1",
         "chart.js": "^2.7.3",
         "copy-webpack-plugin": "^5.0.3",
